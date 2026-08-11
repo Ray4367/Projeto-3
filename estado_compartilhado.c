@@ -1,3 +1,5 @@
+/* estado_compartilhado.c */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "estado_compartilhado.h"
@@ -12,13 +14,6 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/*
- * Valores usados para indicar o estado da inicialização.
- *
- * 0 = não inicializado
- * 1 = inicializando
- * 2 = pronto
- */
 #define ESTADO_NAO_INICIALIZADO 0u
 #define ESTADO_INICIALIZANDO    1u
 #define ESTADO_PRONTO           2u
@@ -26,9 +21,6 @@
 #define ESTADO_MAGIC   UINT64_C(0x5245534552564153)
 #define ESTADO_VERSION 1u
 
-/*
- * Esta estrutura existe somente dentro da SHM.
- */
 typedef struct {
     uint32_t inicializacao;
     uint32_t quantidade;
@@ -46,12 +38,6 @@ typedef struct {
 
 } estado_shm_t;
 
-/*
- * Handle privado da biblioteca.
- *
- * O servidor/inspetor recebem apenas estado_t*.
- * Nunca enxergam o mutex.
- */
 struct estado {
     int fd;
     estado_shm_t *shm;
@@ -82,7 +68,9 @@ static int mutex_inicializar(pthread_mutex_t *mutex)
 
     if (pthread_mutexattr_setpshared(
             &attr,
-            PTHREAD_PROCESS_SHARED) != 0) {
+            PTHREAD_PROCESS_SHARED
+        ) != 0) {
+
         pthread_mutexattr_destroy(&attr);
         return -1;
     }
@@ -109,10 +97,6 @@ estado_t *estado_criar(
         quantidade > ESTADO_MAX_RECURSOS)
         return NULL;
 
-    /*
-     * O_EXCL garante que somente um processo
-     * consiga criar a SHM.
-     */
     int fd = shm_open(
         nome,
         O_CREAT | O_EXCL | O_RDWR,
@@ -122,7 +106,11 @@ estado_t *estado_criar(
     if (fd == -1)
         return NULL;
 
-    if (ftruncate(fd, sizeof(estado_shm_t)) == -1) {
+    if (ftruncate(
+            fd,
+            (off_t)sizeof(estado_shm_t)
+        ) == -1) {
+
         close(fd);
         shm_unlink(nome);
         return NULL;
@@ -143,12 +131,20 @@ estado_t *estado_criar(
         return NULL;
     }
 
-    estado_t *estado = calloc(1, sizeof(*estado));
+    estado_t *estado = calloc(
+        1,
+        sizeof(*estado)
+    );
 
     if (estado == NULL) {
-        munmap(shm, sizeof(estado_shm_t));
+        munmap(
+            shm,
+            sizeof(estado_shm_t)
+        );
+
         close(fd);
         shm_unlink(nome);
+
         return NULL;
     }
 
@@ -163,9 +159,9 @@ estado_t *estado_criar(
     );
 
     /*
-     * Publica explicitamente que a inicialização começou.
-     *
-     * O objeto recém-criado começa zerado.
+     * O segmento acabou de ser criado.
+     * O valor 0 significa que a inicialização ainda
+     * não foi publicada.
      */
     __atomic_store_n(
         &shm->inicializacao,
@@ -190,15 +186,22 @@ estado_t *estado_criar(
     );
 
     if (mutex_inicializar(&shm->mutex) != 0) {
-        munmap(shm, sizeof(estado_shm_t));
+        munmap(
+            shm,
+            sizeof(estado_shm_t)
+        );
+
         close(fd);
         shm_unlink(nome);
         free(estado);
+
         return NULL;
     }
 
     /*
-     * Só agora o inspetor pode utilizar a SHM.
+     * O mutex e o restante do estado já estão prontos.
+     * Somente agora outros processos podem anexar e usar
+     * a SHM.
      */
     __atomic_store_n(
         &shm->inicializacao,
@@ -238,42 +241,72 @@ estado_t *estado_anexar(const char *nome)
     }
 
     /*
-     * O servidor pode ter criado a SHM mas ainda estar
-     * inicializando o mutex.
+     * Pode ocorrer de o processo anexar à SHM depois do
+     * shm_open(), mas antes de o servidor publicar
+     * ESTADO_INICIALIZANDO.
      *
-     * Esperamos sem tocar no mutex.
+     * Portanto, os estados 0 e 1 são ambos estados de
+     * espera. Nunca tocamos no mutex enquanto a SHM não
+     * estiver publicada como pronta.
      */
-    while (__atomic_load_n(
-        &shm->inicializacao,
-        __ATOMIC_ACQUIRE) != ESTADO_PRONTO) {
-
-        if (__atomic_load_n(
+    while (1) {
+        uint32_t inicializacao =
+            __atomic_load_n(
                 &shm->inicializacao,
-                __ATOMIC_ACQUIRE) != ESTADO_INICIALIZANDO) {
+                __ATOMIC_ACQUIRE
+            );
 
-            munmap(shm, sizeof(estado_shm_t));
+        if (inicializacao == ESTADO_PRONTO)
+            break;
+
+        if (inicializacao != ESTADO_NAO_INICIALIZADO &&
+            inicializacao != ESTADO_INICIALIZANDO) {
+
+            munmap(
+                shm,
+                sizeof(estado_shm_t)
+            );
+
             close(fd);
+
             return NULL;
         }
 
         sched_yield();
     }
 
+    /*
+     * Depois de ESTADO_PRONTO, o servidor já publicou
+     * magic, version, quantidade e inicializou o mutex.
+     */
     if (shm->magic != ESTADO_MAGIC ||
         shm->version != ESTADO_VERSION ||
         shm->quantidade == 0 ||
         shm->quantidade > ESTADO_MAX_RECURSOS) {
 
-        munmap(shm, sizeof(estado_shm_t));
+        munmap(
+            shm,
+            sizeof(estado_shm_t)
+        );
+
         close(fd);
+
         return NULL;
     }
 
-    estado_t *estado = calloc(1, sizeof(*estado));
+    estado_t *estado = calloc(
+        1,
+        sizeof(*estado)
+    );
 
     if (estado == NULL) {
-        munmap(shm, sizeof(estado_shm_t));
+        munmap(
+            shm,
+            sizeof(estado_shm_t)
+        );
+
         close(fd);
+
         return NULL;
     }
 
@@ -310,14 +343,12 @@ int estado_destruir(estado_t *estado)
     if (estado == NULL || !estado->dono)
         return -1;
 
-    /*
-     * O servidor só chama esta função depois de
-     * todas as threads terminarem.
-     */
     int erro = 0;
 
     if (pthread_mutex_destroy(
-            &estado->shm->mutex) != 0) {
+            &estado->shm->mutex
+        ) != 0) {
+
         erro = 1;
     }
 
@@ -347,13 +378,18 @@ int estado_reservar(
         tamanho > ESTADO_MAX_TITULAR)
         return -1;
 
-    /*
-     * Toda a operação crítica está dentro do monitor.
-     */
-    pthread_mutex_lock(&estado->shm->mutex);
+    if (pthread_mutex_lock(
+            &estado->shm->mutex
+        ) != 0) {
+
+        return -1;
+    }
 
     if (estado->shm->ocupado[id]) {
-        pthread_mutex_unlock(&estado->shm->mutex);
+        pthread_mutex_unlock(
+            &estado->shm->mutex
+        );
+
         return 1;
     }
 
@@ -365,7 +401,9 @@ int estado_reservar(
         tamanho + 1
     );
 
-    pthread_mutex_unlock(&estado->shm->mutex);
+    pthread_mutex_unlock(
+        &estado->shm->mutex
+    );
 
     return 0;
 }
@@ -382,17 +420,27 @@ int estado_cancelar(
         (size_t)id >= estado->shm->quantidade)
         return 2;
 
-    pthread_mutex_lock(&estado->shm->mutex);
+    if (pthread_mutex_lock(
+            &estado->shm->mutex
+        ) != 0) {
+
+        return -1;
+    }
 
     if (!estado->shm->ocupado[id]) {
-        pthread_mutex_unlock(&estado->shm->mutex);
+        pthread_mutex_unlock(
+            &estado->shm->mutex
+        );
+
         return 1;
     }
 
     estado->shm->ocupado[id] = 0;
     estado->shm->titular[id][0] = '\0';
 
-    pthread_mutex_unlock(&estado->shm->mutex);
+    pthread_mutex_unlock(
+        &estado->shm->mutex
+    );
 
     return 0;
 }
@@ -411,10 +459,18 @@ int estado_status(
         (size_t)id >= estado->shm->quantidade)
         return 2;
 
-    pthread_mutex_lock(&estado->shm->mutex);
+    if (pthread_mutex_lock(
+            &estado->shm->mutex
+        ) != 0) {
+
+        return -1;
+    }
 
     if (!estado->shm->ocupado[id]) {
-        pthread_mutex_unlock(&estado->shm->mutex);
+        pthread_mutex_unlock(
+            &estado->shm->mutex
+        );
+
         return 0;
     }
 
@@ -428,7 +484,9 @@ int estado_status(
         titular[tamanho_titular - 1] = '\0';
     }
 
-    pthread_mutex_unlock(&estado->shm->mutex);
+    pthread_mutex_unlock(
+        &estado->shm->mutex
+    );
 
     return 1;
 }
@@ -441,7 +499,12 @@ int estado_snapshot(
     if (estado == NULL || snapshot == NULL)
         return -1;
 
-    pthread_mutex_lock(&estado->shm->mutex);
+    if (pthread_mutex_lock(
+            &estado->shm->mutex
+        ) != 0) {
+
+        return -1;
+    }
 
     snapshot->quantidade =
         estado->shm->quantidade;
@@ -458,7 +521,9 @@ int estado_snapshot(
         sizeof(snapshot->titular)
     );
 
-    pthread_mutex_unlock(&estado->shm->mutex);
+    pthread_mutex_unlock(
+        &estado->shm->mutex
+    );
 
     return 0;
 }
