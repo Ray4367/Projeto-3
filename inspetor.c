@@ -1,3 +1,5 @@
+/* inspetor.c */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "estado_compartilhado.h"
@@ -41,7 +43,8 @@ int main(int argc, char **argv)
 
     if (estado_snapshot(
             estado,
-            &snapshot) != 0) {
+            &snapshot
+        ) != 0) {
 
         fprintf(
             stderr,
