@@ -1,3 +1,4 @@
+/* servidor.c */
 
 #define _POSIX_C_SOURCE 200809L
 
@@ -37,7 +38,10 @@ static void tratar_sinal(int sinal)
     parar = 1;
 }
 
-static int enviar_linha(int fd, const char *linha)
+static int enviar_linha(
+    int fd,
+    const char *linha
+)
 {
     size_t total = strlen(linha);
     size_t enviado = 0;
@@ -77,7 +81,12 @@ static int receber_linha(
     while (pos + 1 < capacidade) {
         char c;
 
-        ssize_t n = recv(fd, &c, 1, 0);
+        ssize_t n = recv(
+            fd,
+            &c,
+            1,
+            0
+        );
 
         if (n == 0)
             return 0;
@@ -101,7 +110,12 @@ static int receber_linha(
     while (1) {
         char c;
 
-        ssize_t n = recv(fd, &c, 1, 0);
+        ssize_t n = recv(
+            fd,
+            &c,
+            1,
+            0
+        );
 
         if (n <= 0)
             return n == 0 ? 0 : -1;
@@ -119,23 +133,52 @@ static int receber_linha(
     return 1;
 }
 
-static int processar(int fd, const char *linha)
+static int processar(
+    int fd,
+    const char *linha
+)
 {
     char comando[16];
 
-    if (sscanf(linha, "%15s", comando) != 1)
-        return enviar_linha(fd, "ERR malformed\n");
+    if (sscanf(
+            linha,
+            "%15s",
+            comando
+        ) != 1) {
+
+        return enviar_linha(
+            fd,
+            "ERR malformed\n"
+        );
+    }
 
     if (strcmp(comando, "LIST") == 0) {
         char extra;
 
-        if (sscanf(linha, "%*s %c", &extra) == 1)
-            return enviar_linha(fd, "ERR malformed\n");
+        if (sscanf(
+                linha,
+                "%*s %c",
+                &extra
+            ) == 1) {
+
+            return enviar_linha(
+                fd,
+                "ERR malformed\n"
+            );
+        }
 
         estado_snapshot_t snapshot;
 
-        if (estado_snapshot(estado, &snapshot) != 0)
-            return enviar_linha(fd, "ERR internal\n");
+        if (estado_snapshot(
+                estado,
+                &snapshot
+            ) != 0) {
+
+            return enviar_linha(
+                fd,
+                "ERR internal\n"
+            );
+        }
 
         char resposta[80];
 
@@ -145,14 +188,21 @@ static int processar(int fd, const char *linha)
             "MAP "
         );
 
-        for (size_t i = 0; i < snapshot.quantidade; ++i)
+        for (size_t i = 0;
+             i < snapshot.quantidade;
+             ++i) {
+
             resposta[pos++] =
                 snapshot.ocupado[i] ? '1' : '0';
+        }
 
         resposta[pos++] = '\n';
         resposta[pos] = '\0';
 
-        return enviar_linha(fd, resposta);
+        return enviar_linha(
+            fd,
+            resposta
+        );
     }
 
     if (strcmp(comando, "RESERVE") == 0) {
@@ -169,7 +219,10 @@ static int processar(int fd, const char *linha)
         );
 
         if (n != 2)
-            return enviar_linha(fd, "ERR malformed\n");
+            return enviar_linha(
+                fd,
+                "ERR malformed\n"
+            );
 
         int rc = estado_reservar(
             estado,
@@ -178,15 +231,27 @@ static int processar(int fd, const char *linha)
         );
 
         if (rc == 0)
-            return enviar_linha(fd, "OK\n");
+            return enviar_linha(
+                fd,
+                "OK\n"
+            );
 
         if (rc == 1)
-            return enviar_linha(fd, "TAKEN\n");
+            return enviar_linha(
+                fd,
+                "TAKEN\n"
+            );
 
         if (rc == 2)
-            return enviar_linha(fd, "INVALID\n");
+            return enviar_linha(
+                fd,
+                "INVALID\n"
+            );
 
-        return enviar_linha(fd, "ERR internal\n");
+        return enviar_linha(
+            fd,
+            "ERR internal\n"
+        );
     }
 
     if (strcmp(comando, "CANCEL") == 0) {
@@ -201,7 +266,10 @@ static int processar(int fd, const char *linha)
         );
 
         if (n != 1)
-            return enviar_linha(fd, "ERR malformed\n");
+            return enviar_linha(
+                fd,
+                "ERR malformed\n"
+            );
 
         int rc = estado_cancelar(
             estado,
@@ -209,15 +277,27 @@ static int processar(int fd, const char *linha)
         );
 
         if (rc == 0)
-            return enviar_linha(fd, "OK\n");
+            return enviar_linha(
+                fd,
+                "OK\n"
+            );
 
         if (rc == 1)
-            return enviar_linha(fd, "FREE\n");
+            return enviar_linha(
+                fd,
+                "FREE\n"
+            );
 
         if (rc == 2)
-            return enviar_linha(fd, "INVALID\n");
+            return enviar_linha(
+                fd,
+                "INVALID\n"
+            );
 
-        return enviar_linha(fd, "ERR internal\n");
+        return enviar_linha(
+            fd,
+            "ERR internal\n"
+        );
     }
 
     if (strcmp(comando, "STATUS") == 0) {
@@ -233,7 +313,10 @@ static int processar(int fd, const char *linha)
         );
 
         if (n != 1)
-            return enviar_linha(fd, "ERR malformed\n");
+            return enviar_linha(
+                fd,
+                "ERR malformed\n"
+            );
 
         int rc = estado_status(
             estado,
@@ -243,7 +326,10 @@ static int processar(int fd, const char *linha)
         );
 
         if (rc == 0)
-            return enviar_linha(fd, "FREE\n");
+            return enviar_linha(
+                fd,
+                "FREE\n"
+            );
 
         if (rc == 1) {
             char resposta[64];
@@ -255,27 +341,51 @@ static int processar(int fd, const char *linha)
                 titular
             );
 
-            return enviar_linha(fd, resposta);
+            return enviar_linha(
+                fd,
+                resposta
+            );
         }
 
         if (rc == 2)
-            return enviar_linha(fd, "INVALID\n");
+            return enviar_linha(
+                fd,
+                "INVALID\n"
+            );
 
-        return enviar_linha(fd, "ERR internal\n");
+        return enviar_linha(
+            fd,
+            "ERR internal\n"
+        );
     }
 
     if (strcmp(comando, "QUIT") == 0) {
         char extra;
 
-        if (sscanf(linha, "%*s %c", &extra) == 1)
-            return enviar_linha(fd, "ERR malformed\n");
+        if (sscanf(
+                linha,
+                "%*s %c",
+                &extra
+            ) == 1) {
 
-        enviar_linha(fd, "BYE\n");
+            return enviar_linha(
+                fd,
+                "ERR malformed\n"
+            );
+        }
+
+        enviar_linha(
+            fd,
+            "BYE\n"
+        );
 
         return 1;
     }
 
-    return enviar_linha(fd, "ERR unknown_command\n");
+    return enviar_linha(
+        fd,
+        "ERR unknown_command\n"
+    );
 }
 
 static void *atender_cliente(void *arg)
@@ -321,7 +431,11 @@ static void *atender_cliente(void *arg)
             break;
     }
 
-    shutdown(fd, SHUT_RDWR);
+    shutdown(
+        fd,
+        SHUT_RDWR
+    );
+
     close(fd);
 
     return NULL;
@@ -376,7 +490,11 @@ static int criar_servidor(int porta)
         return -1;
     }
 
-    if (listen(fd, BACKLOG) == -1) {
+    if (listen(
+            fd,
+            BACKLOG
+        ) == -1) {
+
         close(fd);
         return -1;
     }
@@ -477,7 +595,10 @@ int main(int argc, char **argv)
         NULL
     );
 
-    signal(SIGPIPE, SIG_IGN);
+    signal(
+        SIGPIPE,
+        SIG_IGN
+    );
 
     estado = estado_criar(
         nome_shm,
@@ -498,7 +619,9 @@ int main(int argc, char **argv)
         criar_servidor((int)porta);
 
     if (servidor_fd == -1) {
-        perror("socket/bind/listen");
+        perror(
+            "socket/bind/listen"
+        );
 
         estado_destruir(estado);
         estado_fechar(estado);
@@ -548,7 +671,9 @@ int main(int argc, char **argv)
             continue;
         }
 
-        int *fd = malloc(sizeof(*fd));
+        int *fd = malloc(
+            sizeof(*fd)
+        );
 
         if (fd == NULL) {
             enviar_linha(
@@ -628,4 +753,3 @@ int main(int argc, char **argv)
 
     return EXIT_SUCCESS;
 }
-
