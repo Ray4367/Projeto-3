@@ -1,12 +1,13 @@
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "estado_compartilhado.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,10 +17,19 @@
 #define BACKLOG 16
 #define MAX_LINHA 256
 #define SHM_PADRAO "/reservas_shm"
+#define MAX_THREADS 128
 
 static volatile sig_atomic_t parar = 0;
-
 static estado_t *estado = NULL;
+
+typedef struct {
+    pthread_t thread;
+    int fd;
+    int ativa;
+} conexao_t;
+
+static conexao_t conexoes[MAX_THREADS];
+static size_t quantidade_conexoes = 0;
 
 static void tratar_sinal(int sinal)
 {
@@ -27,10 +37,7 @@ static void tratar_sinal(int sinal)
     parar = 1;
 }
 
-static int enviar_linha(
-    int fd,
-    const char *linha
-)
+static int enviar_linha(int fd, const char *linha)
 {
     size_t total = strlen(linha);
     size_t enviado = 0;
@@ -59,14 +66,6 @@ static int enviar_linha(
     return 0;
 }
 
-/*
- * Lê exatamente uma linha.
- *
- * Retorno:
- *  1 = linha recebida
- *  0 = conexão fechada
- * -1 = erro
- */
 static int receber_linha(
     int fd,
     char *linha,
@@ -99,10 +98,6 @@ static int receber_linha(
             linha[pos++] = c;
     }
 
-    /*
-     * Linha muito grande.
-     * Descarta até encontrar '\n'.
-     */
     while (1) {
         char c;
 
@@ -124,45 +119,23 @@ static int receber_linha(
     return 1;
 }
 
-static int processar(
-    int fd,
-    const char *linha
-)
+static int processar(int fd, const char *linha)
 {
     char comando[16];
 
     if (sscanf(linha, "%15s", comando) != 1)
-        return enviar_linha(
-            fd,
-            "ERR malformed\n"
-        );
+        return enviar_linha(fd, "ERR malformed\n");
 
-    /* LIST */
     if (strcmp(comando, "LIST") == 0) {
         char extra;
 
-        if (sscanf(
-                linha,
-                "%*s %c",
-                &extra) == 1) {
-
-            return enviar_linha(
-                fd,
-                "ERR malformed\n"
-            );
-        }
+        if (sscanf(linha, "%*s %c", &extra) == 1)
+            return enviar_linha(fd, "ERR malformed\n");
 
         estado_snapshot_t snapshot;
 
-        if (estado_snapshot(
-                estado,
-                &snapshot) != 0) {
-
-            return enviar_linha(
-                fd,
-                "ERR internal\n"
-            );
-        }
+        if (estado_snapshot(estado, &snapshot) != 0)
+            return enviar_linha(fd, "ERR internal\n");
 
         char resposta[80];
 
@@ -172,13 +145,9 @@ static int processar(
             "MAP "
         );
 
-        for (size_t i = 0;
-             i < snapshot.quantidade;
-             ++i) {
-
+        for (size_t i = 0; i < snapshot.quantidade; ++i)
             resposta[pos++] =
                 snapshot.ocupado[i] ? '1' : '0';
-        }
 
         resposta[pos++] = '\n';
         resposta[pos] = '\0';
@@ -186,7 +155,6 @@ static int processar(
         return enviar_linha(fd, resposta);
     }
 
-    /* RESERVE */
     if (strcmp(comando, "RESERVE") == 0) {
         int id;
         char titular[ESTADO_MAX_TITULAR + 1];
@@ -201,10 +169,7 @@ static int processar(
         );
 
         if (n != 2)
-            return enviar_linha(
-                fd,
-                "ERR malformed\n"
-            );
+            return enviar_linha(fd, "ERR malformed\n");
 
         int rc = estado_reservar(
             estado,
@@ -221,13 +186,9 @@ static int processar(
         if (rc == 2)
             return enviar_linha(fd, "INVALID\n");
 
-        return enviar_linha(
-            fd,
-            "ERR internal\n"
-        );
+        return enviar_linha(fd, "ERR internal\n");
     }
 
-    /* CANCEL */
     if (strcmp(comando, "CANCEL") == 0) {
         int id;
         char extra;
@@ -240,10 +201,7 @@ static int processar(
         );
 
         if (n != 1)
-            return enviar_linha(
-                fd,
-                "ERR malformed\n"
-            );
+            return enviar_linha(fd, "ERR malformed\n");
 
         int rc = estado_cancelar(
             estado,
@@ -259,13 +217,9 @@ static int processar(
         if (rc == 2)
             return enviar_linha(fd, "INVALID\n");
 
-        return enviar_linha(
-            fd,
-            "ERR internal\n"
-        );
+        return enviar_linha(fd, "ERR internal\n");
     }
 
-    /* STATUS */
     if (strcmp(comando, "STATUS") == 0) {
         int id;
         char extra;
@@ -279,10 +233,7 @@ static int processar(
         );
 
         if (n != 1)
-            return enviar_linha(
-                fd,
-                "ERR malformed\n"
-            );
+            return enviar_linha(fd, "ERR malformed\n");
 
         int rc = estado_status(
             estado,
@@ -304,48 +255,27 @@ static int processar(
                 titular
             );
 
-            return enviar_linha(
-                fd,
-                resposta
-            );
+            return enviar_linha(fd, resposta);
         }
 
         if (rc == 2)
-            return enviar_linha(
-                fd,
-                "INVALID\n"
-            );
+            return enviar_linha(fd, "INVALID\n");
 
-        return enviar_linha(
-            fd,
-            "ERR internal\n"
-        );
+        return enviar_linha(fd, "ERR internal\n");
     }
 
-    /* QUIT */
     if (strcmp(comando, "QUIT") == 0) {
         char extra;
 
-        if (sscanf(
-                linha,
-                "%*s %c",
-                &extra) == 1) {
-
-            return enviar_linha(
-                fd,
-                "ERR malformed\n"
-            );
-        }
+        if (sscanf(linha, "%*s %c", &extra) == 1)
+            return enviar_linha(fd, "ERR malformed\n");
 
         enviar_linha(fd, "BYE\n");
 
         return 1;
     }
 
-    return enviar_linha(
-        fd,
-        "ERR unknown_command\n"
-    );
+    return enviar_linha(fd, "ERR unknown_command\n");
 }
 
 static void *atender_cliente(void *arg)
@@ -368,7 +298,8 @@ static void *atender_cliente(void *arg)
 
         if (strcmp(
                 linha,
-                "__LINHA_MUITO_GRANDE__") == 0) {
+                "__LINHA_MUITO_GRANDE__"
+            ) == 0) {
 
             enviar_linha(
                 fd,
@@ -390,6 +321,7 @@ static void *atender_cliente(void *arg)
             break;
     }
 
+    shutdown(fd, SHUT_RDWR);
     close(fd);
 
     return NULL;
@@ -408,13 +340,17 @@ static int criar_servidor(int porta)
 
     int reutilizar = 1;
 
-    setsockopt(
-        fd,
-        SOL_SOCKET,
-        SO_REUSEADDR,
-        &reutilizar,
-        sizeof(reutilizar)
-    );
+    if (setsockopt(
+            fd,
+            SOL_SOCKET,
+            SO_REUSEADDR,
+            &reutilizar,
+            sizeof(reutilizar)
+        ) == -1) {
+
+        close(fd);
+        return -1;
+    }
 
     struct sockaddr_in endereco;
 
@@ -448,6 +384,37 @@ static int criar_servidor(int porta)
     return fd;
 }
 
+static void parar_conexoes(void)
+{
+    for (size_t i = 0;
+         i < quantidade_conexoes;
+         ++i) {
+
+        if (!conexoes[i].ativa)
+            continue;
+
+        shutdown(
+            conexoes[i].fd,
+            SHUT_RDWR
+        );
+    }
+}
+
+static void aguardar_threads(void)
+{
+    for (size_t i = 0;
+         i < quantidade_conexoes;
+         ++i) {
+
+        pthread_join(
+            conexoes[i].thread,
+            NULL
+        );
+
+        conexoes[i].ativa = 0;
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2 || argc > 3) {
@@ -461,6 +428,7 @@ int main(int argc, char **argv)
     }
 
     char *fim;
+
     long porta = strtol(
         argv[1],
         &fim,
@@ -487,18 +455,30 @@ int main(int argc, char **argv)
 
     struct sigaction sa;
 
-    memset(&sa, 0, sizeof(sa));
+    memset(
+        &sa,
+        0,
+        sizeof(sa)
+    );
 
     sa.sa_handler = tratar_sinal;
 
     sigemptyset(&sa.sa_mask);
 
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    sigaction(
+        SIGINT,
+        &sa,
+        NULL
+    );
 
-    /*
-     * Somente o servidor cria a SHM.
-     */
+    sigaction(
+        SIGTERM,
+        &sa,
+        NULL
+    );
+
+    signal(SIGPIPE, SIG_IGN);
+
     estado = estado_criar(
         nome_shm,
         ESTADO_MAX_RECURSOS
@@ -534,6 +514,7 @@ int main(int argc, char **argv)
 
     while (!parar) {
         struct sockaddr_in cliente;
+
         socklen_t tamanho =
             sizeof(cliente);
 
@@ -551,6 +532,22 @@ int main(int argc, char **argv)
             break;
         }
 
+        if (quantidade_conexoes >= MAX_THREADS) {
+            enviar_linha(
+                cliente_fd,
+                "ERR server_busy\n"
+            );
+
+            shutdown(
+                cliente_fd,
+                SHUT_RDWR
+            );
+
+            close(cliente_fd);
+
+            continue;
+        }
+
         int *fd = malloc(sizeof(*fd));
 
         if (fd == NULL) {
@@ -559,16 +556,28 @@ int main(int argc, char **argv)
                 "ERR server_busy\n"
             );
 
+            shutdown(
+                cliente_fd,
+                SHUT_RDWR
+            );
+
             close(cliente_fd);
+
             continue;
         }
 
         *fd = cliente_fd;
 
-        pthread_t thread;
+        size_t indice =
+            quantidade_conexoes;
+
+        conexoes[indice].fd =
+            cliente_fd;
+
+        conexoes[indice].ativa = 1;
 
         if (pthread_create(
-                &thread,
+                &conexoes[indice].thread,
                 NULL,
                 atender_cliente,
                 fd
@@ -576,39 +585,47 @@ int main(int argc, char **argv)
 
             free(fd);
 
+            conexoes[indice].ativa = 0;
+
             enviar_linha(
                 cliente_fd,
                 "ERR server_busy\n"
             );
 
+            shutdown(
+                cliente_fd,
+                SHUT_RDWR
+            );
+
             close(cliente_fd);
+
             continue;
         }
 
-        /*
-         * A thread é independente.
-         *
-         * O estado só é destruído depois que o processo
-         * deixar de aceitar conexões e as threads forem
-         * encerradas.
-         */
-        pthread_detach(thread);
+        quantidade_conexoes++;
     }
+
+    shutdown(
+        servidor_fd,
+        SHUT_RDWR
+    );
 
     close(servidor_fd);
 
-    /*
-     * O shutdown das threads é feito pelo fechamento
-     * das conexões no fluxo de encerramento.
-     *
-     * Como as threads são detached, damos um pequeno
-     * período para elas terminarem antes da destruição.
-     */
-    sleep(1);
+    parar_conexoes();
 
-    estado_destruir(estado);
+    aguardar_threads();
+
+    if (estado_destruir(estado) != 0) {
+        fprintf(
+            stderr,
+            "Aviso: erro ao destruir a SHM.\n"
+        );
+    }
+
     estado_fechar(estado);
     estado = NULL;
 
     return EXIT_SUCCESS;
 }
+
