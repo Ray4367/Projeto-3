@@ -1,32 +1,33 @@
 CC = gcc
-
-CFLAGS = -std=c17 -Wall -Wextra -Wpedantic -O2
+CFLAGS = -std=c17 -Wall -Wextra -O2
 LDFLAGS = -pthread
 
-.PHONY: all clean
+TARGETS = servidor cliente inspetor
 
-all: servidor cliente inspetor
+all: $(TARGETS)
 
 servidor: servidor.o estado_compartilhado.o
-	$(CC) $(CFLAGS) $^ -o servidor $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 cliente: cliente.o
-	$(CC) $(CFLAGS) $^ -o cliente
+	$(CC) $(CFLAGS) -o $@ $^
 
 inspetor: inspetor.o estado_compartilhado.o
-	$(CC) $(CFLAGS) $^ -o inspetor $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 servidor.o: servidor.c estado_compartilhado.h
-	$(CC) $(CFLAGS) -c servidor.c -o servidor.o
+	$(CC) $(CFLAGS) -c servidor.c
 
 cliente.o: cliente.c
-	$(CC) $(CFLAGS) -c cliente.c -o cliente.o
+	$(CC) $(CFLAGS) -c cliente.c
 
 inspetor.o: inspetor.c estado_compartilhado.h
-	$(CC) $(CFLAGS) -c inspetor.c -o inspetor.o
+	$(CC) $(CFLAGS) -c inspetor.c
 
 estado_compartilhado.o: estado_compartilhado.c estado_compartilhado.h
-	$(CC) $(CFLAGS) -c estado_compartilhado.c -o estado_compartilhado.o
+	$(CC) $(CFLAGS) -c estado_compartilhado.c
 
 clean:
-	rm -f servidor cliente inspetor *.o
+	rm -f *.o $(TARGETS)
+
+.PHONY: all clean
