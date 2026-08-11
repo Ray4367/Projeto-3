@@ -114,7 +114,7 @@ O servidor é o **único criador e proprietário** da SHM.
 Em outro terminal:
 
 ```bash
-./cliente 127.0.0.1 5000
+./cliente localhost 5000
 ```
 
 O cliente é interativo e envia uma requisição por linha.
