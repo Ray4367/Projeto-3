@@ -1,3 +1,5 @@
+/* cliente.c */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -148,9 +150,6 @@ static int receber_linha(
             linha[pos++] = c;
     }
 
-    /*
-     * Descarta o restante da linha.
-     */
     while (1) {
         char c;
 
@@ -207,12 +206,17 @@ int main(int argc, char **argv)
         if (fgets(
                 linha,
                 sizeof(linha),
-                stdin) == NULL) {
+                stdin
+            ) == NULL) {
 
             break;
         }
 
-        if (enviar(fd, linha) == -1) {
+        if (enviar(
+                fd,
+                linha
+            ) == -1) {
+
             fprintf(
                 stderr,
                 "Erro ao enviar.\n"
@@ -240,8 +244,13 @@ int main(int argc, char **argv)
             resposta
         );
 
-        if (strcmp(resposta, "BYE") == 0)
+        if (strcmp(
+                resposta,
+                "BYE"
+            ) == 0) {
+
             break;
+        }
     }
 
     close(fd);
